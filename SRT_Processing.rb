@@ -11,6 +11,9 @@
 #																    #
 ##################################################################### 	
 
+# number of characters per line of captions (+/- one word...)
+$charsPerLine = 40
+
 # minimum time to show caption  [sec]
 $minShowing = 2 		# seconds
 # maximum time to show caption  [sec]
@@ -20,47 +23,47 @@ $minBetween = 0 		# seconds
 # maximum time between captions [sec]
 $maxBetween = 1 		# seconds
 
-# shift time at caption index
+# start shifting time at caption index
 $shiftTime_idx 	= 10
 # shift time by [ms]
-$shiftTime_ms 	= 20000
+$shiftTime_ms 	= 200000
 
 # censor offensive language
-$censor 	= true
+$censor 		= true
 # do spellcheck
-$spellCheck = true
+$spellCheck 	= true
+
+#output filename
+$outFN = "output.txt"
 
 require 'date'
 
-
 class PrepareFile
  
- 	def self.prep(filename)
-		newsArr = IO.read(filename).split(" ")
+ 	def self.prep(filename_in, filename_out)
+		newsArr = IO.read(filename_in).split(" ")
 		newslines = []
 
 		while newsArr.length > 0
 			count = 0
 			s = ""
-			while s.length < 40
+			while s.length < $charsPerLine
 				s += " #{newsArr.shift}"
 			end
 			newslines.push(s)
 		end
-		puts newslines
-#		IO.write("newsLines.txt" )
 
 		t = Time.new(0) 
 
-		IO.write("srtNews.txt", "")
+		IO.write(filename_out, "")
 
 		diffBetween = $maxBetween - $minBetween
 		diffShowing = $maxShowing - $minShowing
 
 		newslines.each_with_index do |s,j|
-			t += minBetween + (diffBetween * rand)
+			t += $minBetween + (diffBetween * rand)
 			t1 = formatTime(t)
-			t += minShowing + (diffShowing * rand)
+			t += $minShowing + (diffShowing * rand)
 			t2 = formatTime(t)
 			s = "#{j} :: #{t1} --> #{t2} ::#{s}\n" 
 			IO.write("srtNews.txt", s, mode: 'a')
@@ -69,17 +72,11 @@ class PrepareFile
  	end
 
  	def self.formatTime(t)
- 		puts t.strftime("%H:%M:%S,%L")
+# 		puts t.strftime("%H:%M:%S,%L")
  		return t.strftime("%H:%M:%S,%L")
 	end
 end 
 
-#   Don't do this unless you need to recreate your input file!!	    #
-#PrepareFile.prep("newsRaw.txt")
-
-
-
-#OUTPUT
 $HASH = {}
 class PrepareHash
 
@@ -93,7 +90,7 @@ class PrepareHash
 			a = s.split(" :: ")
 			times = a[1].split(" --> ")
 			t = []
-			times.each do |time|  				#time is string
+			times.each do |time|  						#time is string
 				milliSplit = time.split(",")
 				dts = milliSplit[0].split(":")
 				ti = Time.new(0) + (dts[0].to_i*3600 + dts[1].to_i*60 + dts[2].to_i + milliSplit[1].to_f/1000)
@@ -116,9 +113,8 @@ class ShiftTime
 		$HASH.each do |obj|
 			if obj[0] >= @index
 				times = [obj[1][:start],obj[1][:end]]
-				times.each_with_index do |time , j|  					#time is now Time-instance
+				times.each_with_index do |time , j|  	#time is now Time-instance (in PrepareHash was String)
 					time += @shift_ms.to_f/1000
-#			 		puts obj[0].to_s + ":  " + time.strftime("%H:%M:%S,%L")
 			 		case j
 			 		when 0
 			 			obj[1][:start] 	= time
@@ -126,7 +122,6 @@ class ShiftTime
 			 			obj[1][:end] 	= time
 			 		end
 				end
-#				p obj
 			end
 		end
 	end
@@ -142,16 +137,14 @@ class SpellCheck
 		checkWords = CheckWords.new("typo")
 		$HASH.each do |obj|
 			wordArr = Utilities.getArrayOfWordsInLine(obj[1][:text])
-			wordArr.each do |s|
-				s = checkWords.checkWord(s)
-			end
+			checkedWordsArr = wordArr.map { |s|	checkWords.checkWord(s) }
+			obj[1][:text] = checkedWordsArr.join(" ")
 		end
 	end
 end
 
 class ProfanityFilter
 	def initialize
-		puts "Hello World, FUCK OFF!! (Oooops, should be censored...)"
 		checkProfanity
 		ValidateContinuation.doIt(:censor)
 	end
@@ -160,9 +153,8 @@ class ProfanityFilter
 		checkWords = CheckWords.new("dirty")
 		$HASH.each do |obj|
 			wordArr = Utilities.getArrayOfWordsInLine(obj[1][:text])
-			wordArr.each do |s|
-				s = checkWords.checkWord(s)
-			end
+			checkedWordsArr = wordArr.map { |s|	checkWords.checkWord(s) }
+			obj[1][:text] = checkedWordsArr.join(" ")
 		end
 	end
 end
@@ -174,26 +166,43 @@ class CheckWords
 			@words = IO.read("offensiveWords.txt").split("\n")
 		elsif typo_or_dirty == "typo"
 			IO.write("possibleTypos.txt","")
-			@words = IO.read("../../words").split("\n")
+			wds = IO.read("../../words").split("\n")
+			@words = wds.map {|word| word.chomp.downcase}
 		else 
-			puts "Something wrong with CheckWords...!!"
+			puts "Only 'typo' or 'dirty' allowed as parameter in CheckWords!"
 		end
 	end
 
-	def checkWord(s)
+	def checkWord(s)q
 		case @type
 		when "dirty"
 			@words.each do |nastyWord|
-				if s.include? nastyWord
+				if s.include?(nastyWord)
+					puts "dirty word found: #{s}"
 					return "CENSORED"
 				end
 			end
+			return s
 		when "typo"
-			if !@words.find(s)
-				s = "**#{s}**"
-				IO.write("possibleTypos.txt", s, mode: 'a')
-				return s
+			####
+			# for some reason this ain't working :-( 
+			####
+			# if !(s in @words)
+			# 	puts "Possible typo found: #{s}"
+			# 	IO.write("possibleTypos.txt", s, mode: 'a')
+			# 	s = "**#{s}**"
+			# end
+			ss = s.chomp.downcase
+			# this is REALLY slow!!!
+			@words.each do |word|
+				if word == ss
+					return s
+				end
 			end
+			puts "Possible typo found: #{s}"
+			IO.write("possibleTypos.txt", "#{s}\n", mode: 'a')
+			s = "**#{s}**"
+			return s
 		end
 	end
 end
@@ -211,7 +220,7 @@ class ValidateContinuation
 				ProfanityFilter.new 
 				return
 			else 
-				Display.new
+				Display.new($outFN)
 				return
 			end
 		when :spellCheck
@@ -219,11 +228,11 @@ class ValidateContinuation
 				ProfanityFilter.new 
 				return
 			else 
-				Display.new
+				Display.new($outFN)
 				return
 			end
 		when :censor
-			Display.new
+			Display.new($outFN)
 			return
 		else
 			puts "Ooops, something wrong with continuation...!!!"
@@ -232,17 +241,32 @@ class ValidateContinuation
 end
 
 class Display
-	def initialize
+	def initialize(outFN)
+		@outFN = outFN
 		puts "Hi, we're in Display now...!!"
 		printDisplay
+		puts "Done!!"
 	end
 
 	def printDisplay 
-		$HASH.each do |obj|
-			# HERE GOES THE OUTPUT...
-			# Do whatever has to be done for displaying the captions.
-			# Thinking of timers using the live times of each caption
-			# as defined in $HASH, delimated by clearScreen
+		# HERE GOES THE OUTPUT...
+		# Do whatever has to be done for displaying the captions.
+		# Thinking of a Timer using the live times of each caption
+		# as defined in $HASH
+		#
+		# later...
+		#
+		# weeell, for now, let's just dump it all in a file...
+		IO.write(@outFN,"")
+		$HASH.keys.each do |key|
+			obj = $HASH[key]
+			outStr = 
+"""
+#{key}
+#{PrepareFile.formatTime(obj[:start])} --> #{PrepareFile.formatTime(obj[:end])}
+#{obj[:text]}
+"""
+			IO.write(@outFN, outStr, mode: 'a')
 		end
 	end
 end
@@ -253,7 +277,16 @@ class Utilities
 	end
 end
 
-PrepareHash.new("srtNews.txt") 		# arg: some file containing text
+rawText = "newsRawDirty.txt"
+srtPrep = "srtNews.txt"
+
+PrepareFile.prep(rawText,srtPrep)
+#	    		 input  ,output
+
+PrepareHash.new(srtPrep)
+# 				input: output of PrepareFile.prep 
+
+
 ShiftTime.new() 			
 
 
